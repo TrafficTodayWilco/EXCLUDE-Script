@@ -1,0 +1,119 @@
+/**
+ * Script Name: EXCLUDE - Search version
+ * E: Eliminate
+ * X: Extraneous
+ * C: Characters &
+ * L: Language
+ * U: Utilizing
+ * D: Dynamic
+ * E: Exclusions
+ * 
+ * Made by: Traffic Today - Wilco
+ *
+ * Purpose:
+ * The original purpose of this script is to exclude search terms that do not 
+ * include Dutch words or those that do not use the Latin-script alphabet. 
+ * For instance, this helps exclude search terms in Russian, Chinese, or other 
+ * non-Latin languages from your Shopping campaigns.
+ *
+ * How It Works:
+ * - The script reads a list of characters or strings from a Google Sheet. 
+ * - It excludes all search terms that do not contain at least one of the specified characters or strings.
+ *
+ * Customization:
+ * - To change the exclusion criteria, update the characters in the linked spreadsheet.
+ * - Current spreadsheet URL: https://docs.google.com/spreadsheets/d/1fJUqBuevul0pQB7S66KkHUSH66QUhdmW-78LitWTuJ4/copy
+ * - Make a copy of the sheet if needed and update the URL in the script.
+ *
+ * Instructions:
+ * - Ensure that the spreadsheet contains the characters or strings to include, 
+ *   one per row in the first column.
+ * - Run the script to process all Shopping campaigns in your account.
+ *
+ * Note:
+ * The impression threshold is set to 0, meaning all search terms with at least 
+ * 1 impression will be analyzed. To focus only on higher-traffic queries, increase 
+ * the `impressionThreshold` value.
+ */
+
+function main() {
+  // Replace with your Google Sheet URL
+  var spreadsheetUrl = "https://docs.google.com/spreadsheets/d/1fJUqBuevul0pQB7S66KkHUSH66QUhdmW-78LitWTuJ4/edit?usp=sharing";
+  var dateRange = "YESTERDAY";
+  var impressionThreshold = 0;
+
+  var includeCharacters = [];
+  try {
+    var spreadsheet = SpreadsheetApp.openByUrl(spreadsheetUrl);
+    var sheet = spreadsheet.getSheets()[0];
+    var spreadsheetData = sheet.getDataRange().getValues();
+
+    for (var i = 1; i < spreadsheetData.length; i++) {
+      var char = spreadsheetData[i][0];
+      if (char) includeCharacters.push(char);
+    }
+    if (includeCharacters.length === 0) {
+      Logger.log("No characters found in the sheet. Exiting script.");
+      return;
+    }
+    Logger.log("Characters to include: " + includeCharacters.join(", "));
+  } catch (e) {
+    Logger.log("Error reading the spreadsheet: " + e);
+    return;
+  }
+
+  var adGroupIds = [];
+  try {
+    // Fetch active ad groups
+    var adGroupIterator = AdWordsApp.adGroups().withCondition("Status = ENABLED").get();
+
+    while (adGroupIterator.hasNext()) {
+      var adGroup = adGroupIterator.next();
+      adGroupIds.push(adGroup.getId());
+    }
+
+    if (adGroupIds.length === 0) {
+      Logger.log("No active ad groups found. Exiting script.");
+      return;
+    }
+    Logger.log("Found " + adGroupIds.length + " active ad groups.");
+  } catch (e) {
+    Logger.log("Error fetching active ad groups: " + e);
+    return;
+  }
+
+  try {
+    var report = AdWordsApp.report(
+      "SELECT Query, AdGroupId, CampaignName, AdGroupName, Impressions " +
+      "FROM SEARCH_QUERY_PERFORMANCE_REPORT " +
+      "WHERE AdGroupId IN [" + adGroupIds.join(",") + "] " +
+      "AND Impressions > " + impressionThreshold + " " +
+      "DURING " + dateRange
+    );
+
+    var rows = report.rows();
+    var numberExcluded = 0;
+
+    while (rows.hasNext()) {
+      var row = rows.next();
+      var query = row["Query"];
+
+      if (!includeCharacters.some(char => query.includes(char))) {
+        Logger.log("Excluding query: " + query + " (does not include any specified characters)");
+
+        var adGroupIterator = AdWordsApp.adGroups().withIds([row["AdGroupId"]]).get();
+        if (adGroupIterator.hasNext()) {
+          var adGroup = adGroupIterator.next();
+          adGroup.createNegativeKeyword('"' + query + '"');
+          numberExcluded++;
+        } else {
+          Logger.log("Ad group with ID " + row["AdGroupId"] + " not found or inaccessible.");
+        }
+      }
+    }
+
+    Logger.log("Excluded " + numberExcluded + " search terms.");
+  } catch (e) {
+    Logger.log("Error processing search queries: " + e);
+  }
+}
